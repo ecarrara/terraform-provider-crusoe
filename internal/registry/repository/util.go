@@ -1,6 +1,10 @@
 package repository
 
 import (
+	"context"
+
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/objectplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	swagger "github.com/crusoecloud/client-go/swagger/v1"
@@ -57,4 +61,47 @@ func repositoryToResourceModel(repository *swagger.Repository, model *repository
 		Url:                        types.StringValue(repository.UpstreamRegistry.Url),
 		UpstreamRegistryCrdentials: credentials,
 	}
+}
+
+// upstreamRegistryCredentialsFromModel returns the API credentials for an upstream
+// registry model, or nil when the model has no credentials or both values are empty.
+func upstreamRegistryCredentialsFromModel(upstreamRegistry *upstreamRegistryResourceModel) *swagger.UpstreamRegistryCredentials {
+	if upstreamRegistry == nil || upstreamRegistry.UpstreamRegistryCrdentials == nil {
+		return nil
+	}
+
+	username := upstreamRegistry.UpstreamRegistryCrdentials.Username.ValueString()
+	password := upstreamRegistry.UpstreamRegistryCrdentials.Password.ValueString()
+	if username == "" && password == "" {
+		return nil
+	}
+
+	return &swagger.UpstreamRegistryCredentials{
+		Username: username,
+		Password: password,
+	}
+}
+
+func upstreamRegistryCredentialsEqual(a, b *swagger.UpstreamRegistryCredentials) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+
+	return *a == *b
+}
+
+// requiresReplaceIfAddedOrRemoved replaces the repository when an object goes from
+// set to unset or back. Changes inside a set object are left to its attributes.
+//
+//nolint:gocritic // hugeParam: req signature required by objectplanmodifier.RequiresReplaceIfFunc
+func requiresReplaceIfAddedOrRemoved(_ context.Context, req planmodifier.ObjectRequest, resp *objectplanmodifier.RequiresReplaceIfFuncResponse) {
+	resp.RequiresReplace = req.StateValue.IsNull() != req.PlanValue.IsNull()
+}
+
+// requiresReplaceIfRemoved replaces the repository when an object is unset. The API
+// can set or change upstream registry credentials in place, but not remove them.
+//
+//nolint:gocritic // hugeParam: req signature required by objectplanmodifier.RequiresReplaceIfFunc
+func requiresReplaceIfRemoved(_ context.Context, req planmodifier.ObjectRequest, resp *objectplanmodifier.RequiresReplaceIfFuncResponse) {
+	resp.RequiresReplace = !req.StateValue.IsNull() && req.PlanValue.IsNull()
 }

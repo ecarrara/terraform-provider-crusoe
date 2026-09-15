@@ -111,3 +111,47 @@ func Test_repositoryToResourceModel_standardModeNoUpstream(t *testing.T) {
 		t.Errorf("upstream_registry = %+v, want nil for a standard repository", model.UpstreamRegistry)
 	}
 }
+
+func Test_upstreamRegistryCredentialsFromModel(t *testing.T) {
+	if got := upstreamRegistryCredentialsFromModel(nil); got != nil {
+		t.Errorf("nil upstream registry: got %v, want nil", got)
+	}
+
+	noCreds := &upstreamRegistryResourceModel{Provider: types.StringValue("docker-hub")}
+	if got := upstreamRegistryCredentialsFromModel(noCreds); got != nil {
+		t.Errorf("no credentials: got %v, want nil", got)
+	}
+
+	emptyCreds := &upstreamRegistryResourceModel{
+		UpstreamRegistryCrdentials: &upstreamRegistryCredentialsResourceModel{
+			Username: types.StringValue(""),
+			Password: types.StringNull(),
+		},
+	}
+	if got := upstreamRegistryCredentialsFromModel(emptyCreds); got != nil {
+		t.Errorf("empty credentials: got %v, want nil", got)
+	}
+
+	want := &swagger.UpstreamRegistryCredentials{Username: "user", Password: "s3cr3t"}
+	if got := upstreamRegistryCredentialsFromModel(upstreamRegistryWithCreds()); !reflect.DeepEqual(got, want) {
+		t.Errorf("credentials: got %v, want %v", got, want)
+	}
+}
+
+func Test_upstreamRegistryCredentialsEqual(t *testing.T) {
+	a := &swagger.UpstreamRegistryCredentials{Username: "user", Password: "one"}
+	b := &swagger.UpstreamRegistryCredentials{Username: "user", Password: "two"}
+
+	if !upstreamRegistryCredentialsEqual(nil, nil) {
+		t.Error("nil, nil should be equal")
+	}
+	if upstreamRegistryCredentialsEqual(a, nil) || upstreamRegistryCredentialsEqual(nil, a) {
+		t.Error("set and nil should differ")
+	}
+	if upstreamRegistryCredentialsEqual(a, b) {
+		t.Error("different passwords should differ")
+	}
+	if !upstreamRegistryCredentialsEqual(a, &swagger.UpstreamRegistryCredentials{Username: "user", Password: "one"}) {
+		t.Error("same values should be equal")
+	}
+}
