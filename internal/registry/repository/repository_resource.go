@@ -139,14 +139,24 @@ func (r *repositoryResource) Schema(ctx context.Context, _ resource.SchemaReques
 							),
 						},
 						Attributes: map[string]schema.Attribute{
+							// An empty value is left out of the request body, so the API
+							// never receives it. Reject it instead of recording a value the
+							// repository does not have; omit the whole block for an upstream
+							// registry that needs no credentials.
 							"username": schema.StringAttribute{
 								Required:            true,
 								MarkdownDescription: apiDescUpstreamCredsUsername,
+								Validators: []validator.String{
+									stringvalidator.LengthAtLeast(1),
+								},
 							},
 							"password": schema.StringAttribute{
 								Required:            true,
 								Sensitive:           true,
 								MarkdownDescription: apiDescUpstreamCredsPassword,
+								Validators: []validator.String{
+									stringvalidator.LengthAtLeast(1),
+								},
 							},
 						},
 					},
@@ -267,6 +277,22 @@ func (r *repositoryResource) Update(ctx context.Context, request resource.Update
 
 	planCredentials := upstreamRegistryCredentialsFromModel(plan.UpstreamRegistry)
 	stateCredentials := upstreamRegistryCredentialsFromModel(state.UpstreamRegistry)
+	if planCredentials == nil && plan.UpstreamRegistry != nil && plan.UpstreamRegistry.UpstreamRegistryCrdentials != nil {
+		// Schema validators reject empty values, so an apply never reaches this.
+		// State cannot stand in for the check either: a freshly imported repository
+		// carries no credentials in state whether or not it has them, because the
+		// API never returns the password.
+		response.Diagnostics.AddError(
+			"Empty Upstream Registry Credentials Not Supported",
+			"The upstream registry credentials of a repository cannot be set to empty values: an empty "+
+				"value is left out of the request, so the repository would keep the credentials it has. "+
+				"Omit the upstream_registry_credentials block for an upstream registry that needs no "+
+				"credentials, or destroy and recreate the repository.",
+		)
+
+		return
+	}
+
 	if credentialsCleared(stateCredentials, planCredentials) {
 		// requiresReplaceIfCredentialsCleared plans a replacement for this, so an
 		// update never reaches it. Refuse rather than report a success that only

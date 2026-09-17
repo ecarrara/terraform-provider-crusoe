@@ -75,6 +75,14 @@ func TestRepositoryResourceSchema_planModifiers(t *testing.T) {
 		if len(stringModifiers(credentials.Attributes, name)) != 0 {
 			t.Errorf("upstream_registry_credentials.%s should be updatable in place", name)
 		}
+
+		credential, ok := credentials.Attributes[name].(schema.StringAttribute)
+		if !ok {
+			t.Fatalf("upstream_registry_credentials.%s is not a string attribute", name)
+		}
+		if len(credential.Validators) == 0 {
+			t.Errorf("upstream_registry_credentials.%s should reject an empty value", name)
+		}
 	}
 }
 
@@ -313,6 +321,37 @@ func TestRepositoryResourceUpdate_clearedCredentialsFails(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A freshly imported repository has no credentials in state, whether or not the
+// repository has them: the API never returns the password. Setting real credentials
+// must reach the API, and empty ones must be refused rather than only stored.
+func TestRepositoryResourceUpdate_importedStateWithoutCredentials(t *testing.T) {
+	imported := repositoryModelWithPassword("ignored")
+	imported.UpstreamRegistry.UpstreamRegistryCrdentials = nil
+
+	t.Run("real credentials are sent", func(t *testing.T) {
+		requests, _, resp := runUpdate(t, imported, repositoryModelWithPassword("new-key"))
+		if resp.Diagnostics.HasError() {
+			t.Fatalf("update diagnostics: %v", resp.Diagnostics)
+		}
+		if len(requests) != 1 || requests[0].method != http.MethodPatch {
+			t.Errorf("got %v, want one PATCH", requests)
+		}
+	})
+
+	t.Run("empty credentials are refused", func(t *testing.T) {
+		empty := repositoryModelWithPassword("")
+		empty.UpstreamRegistry.UpstreamRegistryCrdentials.Username = types.StringValue("")
+
+		requests, _, resp := runUpdate(t, imported, empty)
+		if !resp.Diagnostics.HasError() {
+			t.Error("empty credentials should fail instead of being recorded in state")
+		}
+		if len(requests) != 0 {
+			t.Errorf("got %d API requests, want 0", len(requests))
+		}
+	})
 }
 
 func TestRepositoryResourceUpdate_unchangedCredentialsSkipsAPI(t *testing.T) {
