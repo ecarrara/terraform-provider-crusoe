@@ -98,10 +98,36 @@ func requiresReplaceIfAddedOrRemoved(_ context.Context, req planmodifier.ObjectR
 	resp.RequiresReplace = req.StateValue.IsNull() != req.PlanValue.IsNull()
 }
 
-// requiresReplaceIfRemoved replaces the repository when an object is unset. The API
-// can set or change upstream registry credentials in place, but not remove them.
+// requiresReplaceIfCredentialsCleared replaces the repository when credentials are
+// taken away: the whole object unset, or both of its values emptied. The API can set
+// or change upstream registry credentials in place, but not remove them, and a
+// PATCH-free update would record credentials in state that the repository never got.
 //
 //nolint:gocritic // hugeParam: req signature required by objectplanmodifier.RequiresReplaceIfFunc
-func requiresReplaceIfRemoved(_ context.Context, req planmodifier.ObjectRequest, resp *objectplanmodifier.RequiresReplaceIfFuncResponse) {
-	resp.RequiresReplace = !req.StateValue.IsNull() && req.PlanValue.IsNull()
+func requiresReplaceIfCredentialsCleared(_ context.Context, req planmodifier.ObjectRequest, resp *objectplanmodifier.RequiresReplaceIfFuncResponse) {
+	resp.RequiresReplace = !credentialsObjectEmpty(req.StateValue) && credentialsObjectEmpty(req.PlanValue)
+}
+
+// credentialsObjectEmpty reports whether a credentials object carries nothing the API
+// can be sent — it is unset, or both of its values are known and empty. An unknown
+// value is not empty: its final value is not decided yet.
+func credentialsObjectEmpty(credentials types.Object) bool {
+	if credentials.IsNull() {
+		return true
+	}
+	if credentials.IsUnknown() {
+		return false
+	}
+
+	for _, name := range []string{"username", "password"} {
+		value, ok := credentials.Attributes()[name].(types.String)
+		if !ok {
+			return false
+		}
+		if value.IsUnknown() || value.ValueString() != "" {
+			return false
+		}
+	}
+
+	return true
 }

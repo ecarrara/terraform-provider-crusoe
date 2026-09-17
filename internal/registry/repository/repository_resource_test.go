@@ -78,36 +78,76 @@ func TestRepositoryResourceSchema_planModifiers(t *testing.T) {
 	}
 }
 
-func TestRequiresReplaceIfFuncs(t *testing.T) {
+var credentialsAttrTypes = map[string]attr.Type{
+	"username": types.StringType,
+	"password": types.StringType,
+}
+
+func credentialsObject(username, password attr.Value) types.Object {
+	return types.ObjectValueMust(credentialsAttrTypes, map[string]attr.Value{
+		"username": username,
+		"password": password,
+	})
+}
+
+func TestRequiresReplaceIfAddedOrRemoved(t *testing.T) {
 	set := types.ObjectValueMust(map[string]attr.Type{}, map[string]attr.Value{})
 	null := types.ObjectNull(map[string]attr.Type{})
 
 	tests := []struct {
-		name               string
-		state, plan        types.Object
-		wantAddedOrRemoved bool
-		wantRemoved        bool
+		name        string
+		state, plan types.Object
+		want        bool
 	}{
 		{name: "unchanged set", state: set, plan: set},
 		{name: "unchanged null", state: null, plan: null},
-		{name: "added", state: null, plan: set, wantAddedOrRemoved: true},
-		{name: "removed", state: set, plan: null, wantAddedOrRemoved: true, wantRemoved: true},
+		{name: "added", state: null, plan: set, want: true},
+		{name: "removed", state: set, plan: null, want: true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := planmodifier.ObjectRequest{StateValue: tt.state, PlanValue: tt.plan}
-
 			resp := &objectplanmodifier.RequiresReplaceIfFuncResponse{}
-			requiresReplaceIfAddedOrRemoved(context.Background(), req, resp)
-			if resp.RequiresReplace != tt.wantAddedOrRemoved {
-				t.Errorf("requiresReplaceIfAddedOrRemoved = %v, want %v", resp.RequiresReplace, tt.wantAddedOrRemoved)
+			requiresReplaceIfAddedOrRemoved(context.Background(),
+				planmodifier.ObjectRequest{StateValue: tt.state, PlanValue: tt.plan}, resp)
+			if resp.RequiresReplace != tt.want {
+				t.Errorf("requiresReplaceIfAddedOrRemoved = %v, want %v", resp.RequiresReplace, tt.want)
 			}
+		})
+	}
+}
 
-			resp = &objectplanmodifier.RequiresReplaceIfFuncResponse{}
-			requiresReplaceIfRemoved(context.Background(), req, resp)
-			if resp.RequiresReplace != tt.wantRemoved {
-				t.Errorf("requiresReplaceIfRemoved = %v, want %v", resp.RequiresReplace, tt.wantRemoved)
+func TestRequiresReplaceIfCredentialsCleared(t *testing.T) {
+	filled := credentialsObject(types.StringValue("user"), types.StringValue("s3cr3t"))
+	emptied := credentialsObject(types.StringValue(""), types.StringValue(""))
+	nulled := credentialsObject(types.StringNull(), types.StringNull())
+	unknownPassword := credentialsObject(types.StringValue(""), types.StringUnknown())
+	null := types.ObjectNull(credentialsAttrTypes)
+
+	tests := []struct {
+		name        string
+		state, plan types.Object
+		want        bool
+	}{
+		{name: "unchanged", state: filled, plan: filled},
+		{name: "changed password", state: filled, plan: credentialsObject(types.StringValue("user"), types.StringValue("new"))},
+		{name: "added", state: null, plan: filled},
+		{name: "added to emptied", state: emptied, plan: filled},
+		{name: "removed", state: filled, plan: null, want: true},
+		{name: "emptied", state: filled, plan: emptied, want: true},
+		{name: "nulled out", state: filled, plan: nulled, want: true},
+		{name: "still empty", state: emptied, plan: emptied},
+		{name: "password not decided yet", state: filled, plan: unknownPassword},
+		{name: "whole object not decided yet", state: filled, plan: types.ObjectUnknown(credentialsAttrTypes)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := &objectplanmodifier.RequiresReplaceIfFuncResponse{}
+			requiresReplaceIfCredentialsCleared(context.Background(),
+				planmodifier.ObjectRequest{StateValue: tt.state, PlanValue: tt.plan}, resp)
+			if resp.RequiresReplace != tt.want {
+				t.Errorf("requiresReplaceIfCredentialsCleared = %v, want %v", resp.RequiresReplace, tt.want)
 			}
 		})
 	}
@@ -217,6 +257,19 @@ func TestRepositoryResourceUpdate_changedCredentialsPatchesRepository(t *testing
 	}
 	if got.ProjectID.ValueString() != "proj-123" {
 		t.Errorf("state project_id = %q, want %q", got.ProjectID.ValueString(), "proj-123")
+	}
+}
+
+func TestRepositoryResourceUpdate_clearedCredentialsFails(t *testing.T) {
+	cleared := repositoryModelWithPassword("")
+	cleared.UpstreamRegistry.UpstreamRegistryCrdentials.Username = types.StringValue("")
+
+	requests, _, resp := runUpdate(t, repositoryModelWithPassword("old-key"), cleared)
+	if !resp.Diagnostics.HasError() {
+		t.Error("emptying the credentials should fail instead of reporting a success that only changed state")
+	}
+	if len(requests) != 0 {
+		t.Errorf("got %d API requests, want 0", len(requests))
 	}
 }
 
