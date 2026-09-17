@@ -267,14 +267,15 @@ func (r *repositoryResource) Update(ctx context.Context, request resource.Update
 
 	planCredentials := upstreamRegistryCredentialsFromModel(plan.UpstreamRegistry)
 	stateCredentials := upstreamRegistryCredentialsFromModel(state.UpstreamRegistry)
-	if planCredentials == nil && stateCredentials != nil {
+	if credentialsCleared(stateCredentials, planCredentials) {
 		// requiresReplaceIfCredentialsCleared plans a replacement for this, so an
 		// update never reaches it. Refuse rather than report a success that only
-		// changed state: the repository would keep the credentials it has.
+		// changed state: an empty value is left out of the request body, so the
+		// repository would keep the credentials it has.
 		response.Diagnostics.AddError(
 			"Removing Upstream Registry Credentials Not Supported",
-			"Removing the upstream registry credentials of an existing repository is not supported. "+
-				"To remove them, the repository must be destroyed and recreated.",
+			"Removing a username or password from the upstream registry credentials of an existing "+
+				"repository is not supported. To remove them, the repository must be destroyed and recreated.",
 		)
 
 		return

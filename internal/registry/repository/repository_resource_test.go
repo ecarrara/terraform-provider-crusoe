@@ -121,7 +121,6 @@ func TestRequiresReplaceIfCredentialsCleared(t *testing.T) {
 	filled := credentialsObject(types.StringValue("user"), types.StringValue("s3cr3t"))
 	emptied := credentialsObject(types.StringValue(""), types.StringValue(""))
 	nulled := credentialsObject(types.StringNull(), types.StringNull())
-	unknownPassword := credentialsObject(types.StringValue(""), types.StringUnknown())
 	null := types.ObjectNull(credentialsAttrTypes)
 
 	tests := []struct {
@@ -136,9 +135,37 @@ func TestRequiresReplaceIfCredentialsCleared(t *testing.T) {
 		{name: "removed", state: filled, plan: null, want: true},
 		{name: "emptied", state: filled, plan: emptied, want: true},
 		{name: "nulled out", state: filled, plan: nulled, want: true},
+		{
+			name:  "password emptied only",
+			state: filled,
+			plan:  credentialsObject(types.StringValue("user"), types.StringValue("")),
+			want:  true,
+		},
+		{
+			name:  "username emptied only",
+			state: filled,
+			plan:  credentialsObject(types.StringValue(""), types.StringValue("s3cr3t")),
+			want:  true,
+		},
+		{
+			name:  "password nulled only",
+			state: filled,
+			plan:  credentialsObject(types.StringValue("user"), types.StringNull()),
+			want:  true,
+		},
 		{name: "still empty", state: emptied, plan: emptied},
-		{name: "password not decided yet", state: filled, plan: unknownPassword},
+		{
+			name:  "empty username stays empty",
+			state: credentialsObject(types.StringValue(""), types.StringValue("s3cr3t")),
+			plan:  credentialsObject(types.StringValue(""), types.StringValue("new")),
+		},
+		{
+			name:  "password not decided yet",
+			state: filled,
+			plan:  credentialsObject(types.StringValue("user"), types.StringUnknown()),
+		},
 		{name: "whole object not decided yet", state: filled, plan: types.ObjectUnknown(credentialsAttrTypes)},
+		{name: "created", state: types.ObjectNull(credentialsAttrTypes), plan: filled},
 	}
 
 	for _, tt := range tests {
@@ -261,15 +288,30 @@ func TestRepositoryResourceUpdate_changedCredentialsPatchesRepository(t *testing
 }
 
 func TestRepositoryResourceUpdate_clearedCredentialsFails(t *testing.T) {
-	cleared := repositoryModelWithPassword("")
-	cleared.UpstreamRegistry.UpstreamRegistryCrdentials.Username = types.StringValue("")
+	bothEmpty := repositoryModelWithPassword("")
+	bothEmpty.UpstreamRegistry.UpstreamRegistryCrdentials.Username = types.StringValue("")
 
-	requests, _, resp := runUpdate(t, repositoryModelWithPassword("old-key"), cleared)
-	if !resp.Diagnostics.HasError() {
-		t.Error("emptying the credentials should fail instead of reporting a success that only changed state")
-	}
-	if len(requests) != 0 {
-		t.Errorf("got %d API requests, want 0", len(requests))
+	passwordEmpty := repositoryModelWithPassword("")
+
+	usernameEmpty := repositoryModelWithPassword("old-key")
+	usernameEmpty.UpstreamRegistry.UpstreamRegistryCrdentials.Username = types.StringValue("")
+
+	// An empty value is left out of the request body, so a PATCH would keep the
+	// repository's current credentials while state recorded the empty one.
+	for name, plan := range map[string]*repositoryResourceModel{
+		"both values emptied": bothEmpty,
+		"password emptied":    passwordEmpty,
+		"username emptied":    usernameEmpty,
+	} {
+		t.Run(name, func(t *testing.T) {
+			requests, _, resp := runUpdate(t, repositoryModelWithPassword("old-key"), plan)
+			if !resp.Diagnostics.HasError() {
+				t.Error("emptying a credential should fail instead of reporting a success that only changed state")
+			}
+			if len(requests) != 0 {
+				t.Errorf("got %d API requests, want 0", len(requests))
+			}
+		})
 	}
 }
 

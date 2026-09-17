@@ -155,3 +155,33 @@ func Test_upstreamRegistryCredentialsEqual(t *testing.T) {
 		t.Error("same values should be equal")
 	}
 }
+
+func Test_credentialsCleared(t *testing.T) {
+	filled := &swagger.UpstreamRegistryCredentials{Username: "user", Password: "s3cr3t"}
+
+	tests := []struct {
+		name        string
+		state, plan *swagger.UpstreamRegistryCredentials
+		want        bool
+	}{
+		{name: "no prior credentials", state: nil, plan: filled},
+		{name: "unchanged", state: filled, plan: filled},
+		{name: "changed password", state: filled, plan: &swagger.UpstreamRegistryCredentials{Username: "user", Password: "new"}},
+		{name: "removed", state: filled, plan: nil, want: true},
+		{name: "password emptied", state: filled, plan: &swagger.UpstreamRegistryCredentials{Username: "user"}, want: true},
+		{name: "username emptied", state: filled, plan: &swagger.UpstreamRegistryCredentials{Password: "s3cr3t"}, want: true},
+		{
+			name:  "empty username stays empty",
+			state: &swagger.UpstreamRegistryCredentials{Password: "s3cr3t"},
+			plan:  &swagger.UpstreamRegistryCredentials{Password: "new"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := credentialsCleared(tt.state, tt.plan); got != tt.want {
+				t.Errorf("credentialsCleared = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

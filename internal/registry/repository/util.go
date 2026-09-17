@@ -98,36 +98,64 @@ func requiresReplaceIfAddedOrRemoved(_ context.Context, req planmodifier.ObjectR
 	resp.RequiresReplace = req.StateValue.IsNull() != req.PlanValue.IsNull()
 }
 
-// requiresReplaceIfCredentialsCleared replaces the repository when credentials are
-// taken away: the whole object unset, or both of its values emptied. The API can set
-// or change upstream registry credentials in place, but not remove them, and a
-// PATCH-free update would record credentials in state that the repository never got.
+// credentialFieldNames are the upstream registry credential attributes, in the
+// resource schema and in the API request body alike.
+var credentialFieldNames = []string{"username", "password"}
+
+// requiresReplaceIfCredentialsCleared replaces the repository when a credential value
+// is taken away: the whole object unset, or a value that was set emptied. The API can
+// set or change upstream registry credentials in place, but not remove them. An empty
+// value is omitted from the request body, so the repository would keep the value it
+// has while state records the empty one — and since the credentials are write-only,
+// no later read corrects that.
 //
 //nolint:gocritic // hugeParam: req signature required by objectplanmodifier.RequiresReplaceIfFunc
 func requiresReplaceIfCredentialsCleared(_ context.Context, req planmodifier.ObjectRequest, resp *objectplanmodifier.RequiresReplaceIfFuncResponse) {
-	resp.RequiresReplace = !credentialsObjectEmpty(req.StateValue) && credentialsObjectEmpty(req.PlanValue)
+	resp.RequiresReplace = credentialsObjectCleared(req.StateValue, req.PlanValue)
 }
 
-// credentialsObjectEmpty reports whether a credentials object carries nothing the API
-// can be sent — it is unset, or both of its values are known and empty. An unknown
-// value is not empty: its final value is not decided yet.
-func credentialsObjectEmpty(credentials types.Object) bool {
-	if credentials.IsNull() {
-		return true
-	}
-	if credentials.IsUnknown() {
+// credentialsObjectCleared reports whether the plan empties any credential value the
+// prior state had. An unknown value is never treated as emptied: it is not decided yet.
+func credentialsObjectCleared(state, plan types.Object) bool {
+	if state.IsNull() || state.IsUnknown() || plan.IsUnknown() {
 		return false
 	}
 
-	for _, name := range []string{"username", "password"} {
-		value, ok := credentials.Attributes()[name].(types.String)
-		if !ok {
-			return false
+	for _, name := range credentialFieldNames {
+		stateValue, ok := credentialsObjectField(state, name)
+		if !ok || stateValue == "" {
+			continue // nothing there to take away
 		}
-		if value.IsUnknown() || value.ValueString() != "" {
-			return false
+		if plan.IsNull() {
+			return true
+		}
+		if planValue, ok := credentialsObjectField(plan, name); ok && planValue == "" {
+			return true
 		}
 	}
 
-	return true
+	return false
+}
+
+// credentialsObjectField returns a credential value, and whether it is a known string.
+func credentialsObjectField(credentials types.Object, name string) (string, bool) {
+	value, ok := credentials.Attributes()[name].(types.String)
+	if !ok || value.IsUnknown() {
+		return "", false
+	}
+
+	return value.ValueString(), true
+}
+
+// credentialsCleared reports whether plan empties any credential value that state had.
+func credentialsCleared(state, plan *swagger.UpstreamRegistryCredentials) bool {
+	if state == nil {
+		return false
+	}
+	if plan == nil {
+		return true
+	}
+
+	return (state.Username != "" && plan.Username == "") ||
+		(state.Password != "" && plan.Password == "")
 }
